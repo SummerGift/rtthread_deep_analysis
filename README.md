@@ -11,6 +11,6 @@ ___
 ## 内容
 
 ### 第一章：文件系统
-- [ ] [Lecture 1.1 - RT-Thread DFS 文件系统](./Lectures/DFS文件描述符管理.md)
-- [ ] [Lecture 1.2 - DFS 文件描述符（FD）管理](./Lectures/RT-Thread_DFS_文件系统.md)
+- [ ] [Lecture 1.1 - RT-Thread DFS 文件系统](./Lectures/Lecture_1.1_RT-Thread_DFS_文件系统.md)
+- [ ] [Lecture 1.2 - DFS 文件描述符（FD）管理](./Lectures/Lecture_1.2_DFS文件描述符管理.md)
 
