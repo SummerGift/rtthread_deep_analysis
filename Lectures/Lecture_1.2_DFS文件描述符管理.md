@@ -1,13 +1,13 @@
 # DFS 的文件描述符（FD）管理
-## 1. 文件描述符 FD
+## 1. DFS_FD 介绍
 
-在RTT 中有多个不同层面的文件描述符,最基本的是文件 fd。
+在 RT-Thread 中有多种不同类型的文件描述符，最基本的是 DFS_FD 。
 
-文件 FD 是由一个结构体数组来存储的，其定义在 dfs.c 文件中，
+DFS_FD 是由一个结构体数组来存储的，其定义在 dfs.c 文件中：
 ```c
 struct dfs_fd fd_table[DFS_FD_MAX];
 ```
-这里的 DFS_FD_MAX 参数最终由 rtconfig.h 中的宏来定义。意思就是系统中允许存在的文件描述符数量。任何类型的文件打开或者使用，都要消耗这个 fd 描述符资源。所以应该根据情况写的稍大一些。
+这里的 DFS_FD_MAX 参数最终由 rtconfig.h 中的宏来定义。意思就是系统中允许存在的文件描述符数量。任何类型的文件打开或者使用，都要消耗这个 DFS_FD 描述符资源。所以应该根据情况写的稍大一些。
 ```c
 #define DFS_FD_MAX 64
 ```
@@ -77,7 +77,7 @@ static struct lwip_sock sockets[NUM_SOCKETS];
 ```c
 #define RT_MEMP_NUM_NETCONN 32
 ```
-意思是系统中最大允许的 socket 连接的数量，这个数值是不允许比上文提到的文件描述符 fd 大的，因为 socket 套接字描述符也是 fd 描述符的一种，使用 Posix 接口来申请 socket 时，首先要申请 fd 描述符的空间，如果这个值大于 fd 的最大值,那么当申请更多的 socket 的时候，必然会出现失败的情况。
+意思是系统中最大允许的 socket 连接的数量，这个数值是不允许比上文提到的文件描述符 `DFS_FD_MAX` 大的，因为 socket 套接字描述符也是 DFS_FD 描述符的一种，使用 Posix 接口来申请 socket 时，首先要申请 DFS_FD  的空间，如果 `RT_MEMP_NUM_NETCONN` 的值大于 DFS_FD 的最大值，那么当申请更多的 socket 的时候，必然会出现失败的情况。
 
 ```c
 int dfs_net_getsocket(int fd)
@@ -110,10 +110,12 @@ int closesocket(int s)
 }
 ```
 根据以上代码可以看出关闭SOCKET的时候，先是将文件描述符从table中删除，然后再调用lwip提供的接口关闭 socket 连接。
-那么现在问题来了，再建立一个socket连接的时候，获取文件描述符fd又是什么流程呢。
-list_fd 函数会遍历 fd_table[]，然后将已经使用的 fd 信息打印出来，包括 fd 号码，类型和引用次数。这里打印出的 fd 号码指的是这个 fd 再 table 里面的索引号。
+list_fd 函数会遍历 fd_table[]，然后将已经使用的 DFS_FD 信息打印出来，包括 DFS_FD 号码，类型和引用次数。这里打印出的 DFS_FD 号码指的是这个 DFS_FD 在 table 里面的索引号。
 
 ### 2.1 获取socket fd 
+
+那么现在问题来了，再建立一个socket连接的时候，获取文件描述符fd又是什么流程呢。
+
 在 POSIX 的 socket 函数中，调用了 fd_new() 函数。
 在 fd_new 函数中
 ```c
