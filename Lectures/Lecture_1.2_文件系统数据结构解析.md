@@ -155,3 +155,162 @@ typedef struct rt_mutex *rt_mutex_t;
 - 中间层的文件系统向文件系统操作表中注册该文件系统的操作函数。
 - 向文件系统挂载表中添加需要挂载的文件系统信息。
 - 有了文件系统挂载表、文件系统操作表、文件描述符表这三张表，系统就可以找到对特定文件的操作函数了。
+
+
+
+文件系统挂载函数：
+
+```c
+/**
+ * this function will mount a file system on a specified path.
+ *
+ * @param device_name the name of device which includes a file system.
+ * @param path the path to mount a file system
+ * @param filesystemtype the file system type
+ * @param rwflag the read/write etc. flag.
+ * @param data the private data(parameter) for this file system.
+ *
+ * @return 0 on successful or -1 on failed.
+ */
+int dfs_mount(const char   *device_name,
+              const char   *path,
+              const char   *filesystemtype,
+              unsigned long rwflag,
+              const void   *data)
+{
+    const struct dfs_filesystem_ops **ops;
+    struct dfs_filesystem *iter;
+    struct dfs_filesystem *fs = NULL;
+    char *fullpath = NULL;
+    rt_device_t dev_id;
+
+    /* open specific device */       //打开一个特定的设备用来挂载
+    if (device_name == NULL)
+    {
+        /* which is a non-device filesystem mount */
+        dev_id = NULL;
+    }
+    else if ((dev_id = rt_device_find(device_name)) == NULL)  //如果找不到指定的设备就返回错误信息
+    {
+        /* no this device */
+        rt_set_errno(-ENODEV);
+        return -1;
+    }
+
+    /* find out the specific filesystem */
+    dfs_lock();                                        // 查找是否注册了指定的文件系统类型
+
+    for (ops = &filesystem_operation_table[0];
+           ops < &filesystem_operation_table[DFS_FILESYSTEM_TYPES_MAX]; ops++)
+        if ((*ops != NULL) && (strcmp((*ops)->name, filesystemtype) == 0))
+            break;
+
+    dfs_unlock();
+
+    if (ops == &filesystem_operation_table[DFS_FILESYSTEM_TYPES_MAX])   // 如果相等则为找到最后也没找到
+    {
+        /* can't find filesystem */
+        rt_set_errno(-ENODEV);                       // 如果没有注册特定的文件系统类型，则返回错误
+        return -1;
+    }
+
+    /* check if there is mount implementation */     // 如果该文件系统没有提供操作函数，或者挂载函数为空则返回错误
+    if ((*ops == NULL) || ((*ops)->mount == NULL))
+    {
+        rt_set_errno(-ENOSYS);
+        return -1;
+    }
+
+    /* make full path for special file */
+    fullpath = dfs_normalize_path(NULL, path);       // 获得需要挂载的绝对路径
+    if (fullpath == NULL) /* not an abstract path */
+    {
+        rt_set_errno(-ENOTDIR);
+        return -1;
+    }
+
+    /* Check if the path exists or not, raw APIs call, fixme */
+    if ((strcmp(fullpath, "/") != 0) && (strcmp(fullpath, "/dev") != 0))   // 如果地址不是根目录也不是 /dev 目录，
+    {                                                                      // 那么尝试打开指定的路径，如果没有这个路径则报错
+        struct dfs_fd fd;
+
+        if (dfs_file_open(&fd, fullpath, O_RDONLY | O_DIRECTORY) < 0)
+        {
+            rt_free(fullpath);
+            rt_set_errno(-ENOTDIR);
+
+            return -1;
+        }
+        dfs_file_close(&fd);
+    }
+
+    /* check whether the file system mounted or not  in the filesystem table
+     * if it is unmounted yet, find out an empty entry */     //  查看这个文件系统是否已经被挂载了，
+    dfs_lock();                                               //  如果还没有被挂载，那么找到一个挂载点
+
+    for (iter = &filesystem_table[0];
+            iter < &filesystem_table[DFS_FILESYSTEMS_MAX]; iter++)
+    {
+        /* check if it is an empty filesystem table entry? if it is, save fs */
+        if (iter->ops == NULL)                                //  查看是否有空的挂载点，如果有那么就将这个挂载点的指针赋值给 fs
+            (fs == NULL) ? (fs = iter) : 0;
+        /* check if the PATH is mounted */
+        else if (strcmp(iter->path, path) == 0)               //  没有空的可挂载点，查看想要挂载的路径是否已经被挂载了其他类型的文件系统
+        {
+            rt_set_errno(-EINVAL);
+            goto err1;
+        }
+    }
+                                                        // 走到这里如果有位置挂载，那么两个条件都不会成立。只会给 FS 赋值最小的那个挂载点
+    if ((fs == NULL) && (iter == &filesystem_table[DFS_FILESYSTEMS_MAX]))
+    {
+        rt_set_errno(-ENOSPC);                          // 如果没有空的挂载点，返回没有空位了，这里常出现错误，需要添加一些提示信息。
+        goto err1;
+    }
+
+    /* register file system */                          // 开始注册需要挂载的文件系统信息。
+    fs->path   = fullpath;                              // 文件系统的挂载地址
+    fs->ops    = *ops;                                  // 文件系统所需要的操作函数
+    fs->dev_id = dev_id;                                // 挂载设备的设备 ID
+    /* release filesystem_table lock */
+    dfs_unlock();
+
+    /* open device, but do not check the status of device */
+    if (dev_id != NULL)                                 // 尝试打开需要挂载的设备，如果打不开则清空上面初始化的内容返回错误
+    {
+        if (rt_device_open(fs->dev_id,
+                           RT_DEVICE_OFLAG_RDWR) != RT_EOK)
+        {
+            /* The underlaying device has error, clear the entry. */
+            dfs_lock();
+            memset(fs, 0, sizeof(struct dfs_filesystem));
+
+            goto err1;
+        }
+    }
+
+    /* call mount of this filesystem */
+    if ((*ops)->mount(fs, rwflag, data) < 0)             // s挂载函数，传入挂载路径，操作集合指针，设备 ID，进行底层操作
+    {
+        /* close device */
+        if (dev_id != NULL)
+            rt_device_close(fs->dev_id);
+
+        /* mount failed */
+        dfs_lock();
+        /* clear filesystem table entry */
+        memset(fs, 0, sizeof(struct dfs_filesystem));
+
+        goto err1;
+    }
+
+    return 0;                                            //  如果没有错误则返回 0
+
+err1:
+    dfs_unlock();
+    rt_free(fullpath);
+
+    return -1;
+}
+```
+
